@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LG webOS Snake</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            background-color: #121212;
+            color: #ffffff;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+        /* Адаптивный контейнер для ТВ (10-foot UI) */
+        #game-container {
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 {
+            font-size: 3rem;
+            margin-bottom: 10px;
+            color: #a50034; /* Фирменный цвет LG */
+            text-shadow: 0 0 10px rgba(165, 0, 52, 0.5);
+        }
+        #score-board {
+            font-size: 2rem;
+            margin-bottom: 20px;
+            font-weight: bold;
+        }
+        /* Игровое поле */
+        canvas {
+            background-color: #1a1a1a;
+            border: 6px solid #a50034;
+            border-radius: 10px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.8);
+            cursor: pointer;
+        }
+        /* Экран завершения игры / старта */
+        #overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+        }
+        .btn {
+            background-color: #a50034;
+            color: white;
+            border: none;
+            padding: 20px 40px;
+            font-size: 2rem;
+            border-radius: 50px;
+            cursor: pointer;
+            margin-top: 20px;
+            transition: transform 0.2s, background-color 0.2s;
+        }
+        /* Эффект фокуса пульта Magic Remote */
+        .btn:focus, .btn:hover {
+            background-color: #e6004c;
+            transform: scale(1.1);
+            outline: none;
+            box-shadow: 0 0 20px #e6004c;
+        }
+        #game-over-text {
+            font-size: 4rem;
+            color: #ff3333;
+            margin-bottom: 10px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <h1>ЗМЕЙКА</h1>
+        <div id="score-board">Счет: <span id="score">0</span> | Рекорд: <span id="high-score">0</span></div>
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+    </div>
+
+    <!-- Информационный оверлей для ТВ -->
+    <div id="overlay">
+        <div id="game-over-text">ИГРА ОКОНЧЕНА</div>
+        <p style="font-size: 2rem; max-width: 600px; text-align: center; margin-bottom: 20px;">
+            Управляйте **стрелками** на пульте или нажимайте на кнопки экрана указателем **Magic Remote**.
+        </p>
+        <button id="start-btn" class="btn">Играть (OK)</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const scoreElement = document.getElementById("score");
+        const highScoreElement = document.getElementById("high-score");
+        const overlay = document.getElementById("overlay");
+        const startBtn = document.getElementById("start-btn");
+        const gameOverText = document.getElementById("game-over-text");
+
+        // Размеры сетки (оптимизировано под экран ТВ)
+        const gridSize = 25; 
+        const tileCountX = canvas.width / gridSize;
+        const tileCountY = canvas.height / gridSize;
+
+        let snake = [];
+        let food = { x: 0, y: 0 };
+        let dx = gridSize;
+        let dy = 0;
+        let score = 0;
+        let highScore = localStorage.getItem("snake_high_score") || 0;
+        let gameInterval = null;
+        let isGameRunning = false;
+        let changingDirection = false; // Защита от быстрого двойного нажатия
+
+        highScoreElement.innerText = highScore;
+
+        // Кнопка старта (фокусируемся на ней сразу для пульта)
+        startBtn.focus();
+        startBtn.addEventListener("click", startGame);
+
+        // Обработка кнопок пульта LG (webOS мапит стрелки на стандартные коды клавиатуры)
+        document.addEventListener("keydown", handleKeyDown);
+
+        function startGame() {
+            overlay.style.display = "none";
+            gameOverText.style.display = "none";
+            score = 0;
+            scoreElement.innerText = score;
+            snake = [
+                { x: gridSize * 5, y: gridSize * 5 },
+                { x: gridSize * 4, y: gridSize * 5 },
+                { x: gridSize * 3, y: gridSize * 5 }
+            ];
+            dx = gridSize;
+            dy = 0;
+            isGameRunning = true;
+            changingDirection = false;
+            generateFood();
+            
+            if (gameInterval) clearInterval(gameInterval);
+            gameInterval = setInterval(updateGame, 100); // Скорость змейки (100мс)
+        }
+
+        function updateGame() {
+            if (hasGameEnded()) {
+                gameOver();
+                return;
+            }
+
+            changingDirection = false;
+            clearCanvas();
+            drawFood();
+            moveSnake();
+            drawSnake();
+        }
+
+        function clearCanvas() {
+            ctx.fillStyle = "#1a1a1a";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        function drawSnake() {
+            snake.forEach((part, index) => {
+                // Голова змейки выделяется цветом LG, тело чуть блеклое
+                ctx.fillStyle = index === 0 ? "#a50034" : "#d6336c";
+                ctx.strokeStyle = "#1a1a1a";
+                ctx.lineWidth = 2;
+                
+                ctx.beginPath();
+                ctx.roundRect(part.x, part.y, gridSize, gridSize, [6]);
+                ctx.fill();
+                ctx.stroke();
+            });
+        }
+
+        function moveSnake() {
+            const head = { x: snake[0].x + dx, y: snake[0].y + dy };
+            snake.unshift(head);
+
+            // Проверка съела ли змейка еду
+            const hasEatenFood = snake[0].x === food.x && snake[0].y === food.y;
+            if (hasEatenFood) {
+                score += 10;
+                scoreElement.innerText = score;
+                generateFood();
+            } else {
+                snake.pop(); // Удаляем хвост, если не ели
+            }
+        }
+
+        function generateFood() {
+            food.x = Math.floor(Math.random() * tileCountX) * gridSize;
+            food.y = Math.floor(Math.random() * tileCountY) * gridSize;
+
+            // Чтобы еда не спавнилась внутри змейки
+            snake.forEach(part => {
+                const hasEaten = part.x === food.x && part.y === food.y;
+                if (hasEaten) generateFood();
+            });
+        }
+
+        function drawFood() {
+            ctx.fillStyle = "#2b8a3e"; // Зеленое яблоко
+            ctx.beginPath();
+            ctx.roundRect(food.x, food.y, gridSize, gridSize, [50]); // Круглая еда
+            ctx.fill();
+        }
+
+        function handleKeyDown(event) {
+            // Если игра не идет и нажата кнопка Enter/OK на пульте
+            if (!isGameRunning && (event.key === "Enter" || event.keyCode === 13)) {
+                startGame();
+                return;
+            }
+
+            if (changingDirection) return;
+
+            const keyPressed = event.keyCode;
+            
+            // Коды клавиш: webOS сопоставляет стрелки пульта со стандартными стрелками клавиатуры
+            const LEFT_KEY = 37;
+            const UP_KEY = 38;
+            const RIGHT_KEY = 39;
+            const DOWN_KEY = 40;
+
+            const goingUp = dy === -gridSize;
+            const goingDown = dy === gridSize;
+            const goingRight = dx === gridSize;
+            const goingLeft = dx === -gridSize;
+
+            if (keyPressed === LEFT_KEY && !goingRight) {
+                dx = -gridSize; dy = 0; changingDirection = true;
+            }
+            if (keyPressed === UP_KEY && !goingDown) {
+                dx = 0; dy = -gridSize; changingDirection = true;
+            }
+            if (keyPressed === RIGHT_KEY && !goingLeft) {
+                dx = gridSize; dy = 0; changingDirection = true;
+            }
+            if (keyPressed === DOWN_KEY && !goingUp) {
+                dx = 0; dy = gridSize; changingDirection = true;
+            }
+        }
+
+        function hasGameEnded() {
+            // Столкновение со стенами
+            const hitLeftWall = snake[0].x < 0;
+            const hitRightWall = snake[0].x >= canvas.width;
+            const hitToptWall = snake[0].y < 0;
+            const hitBottomWall = snake[0].y >= canvas.height;
+
+            if (hitLeftWall || hitRightWall || hitToptWall || hitBottomWall) return true;
+
+            // Столкновение с самим собой
+            for (let i = 4; i < snake.length; i++) {
+                if (snake[i].x === snake[0].x && snake[i].y === snake[0].y) return true;
+            }
+            return false;
+        }
+
+        function gameOver() {
+            isGameRunning = false;
+            clearInterval(gameInterval);
+            
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem("snake_high_score", highScore);
+                highScoreElement.innerText = highScore;
+            }
+
+            gameOverText.style.display = "block";
+            overlay.style.display = "flex";
+            startBtn.innerText = "Играть снова";
+            startBtn.focus(); // Переводим фокус для пульта
+        }
+    </script>
+</body>
+</html>
